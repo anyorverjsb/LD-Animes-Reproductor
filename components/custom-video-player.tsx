@@ -14,9 +14,10 @@ interface CustomVideoPlayerProps {
   onError?: () => void
   onLoad?: () => void
   forceFullSize?: boolean
+  subtitleUrl?: string
 }
 
-export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize = false }: CustomVideoPlayerProps) {
+export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize = false, subtitleUrl }: CustomVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -36,6 +37,7 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
   const [showSkipIcon, setShowSkipIcon] = useState<"forward" | "backward" | null>(null)
   const [buffered, setBuffered] = useState(0)
   const [isFillScreen, setIsFillScreen] = useState(false)
+  const [autoDetectedSubtitleUrl, setAutoDetectedSubtitleUrl] = useState<string | null>(null)
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout>()
   const lastTapRef = useRef<number>(0)
@@ -53,6 +55,57 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
 
     const finalKey = `video_progress_${hash}`
     return finalKey
+  }
+
+  const detectSubtitleUrl = async (videoUrl: string): Promise<string | null> => {
+    // Si ya hay una URL de subtítulo proporcionada, usarla
+    if (subtitleUrl) {
+      return subtitleUrl
+    }
+
+    // Intentar detectar automáticamente el archivo de subtítulos
+    const subtitleExtensions = [".srt", ".vtt", ".ass", ".ssa"]
+    
+    // Obtener el nombre del archivo sin extensión
+    const lastSlash = videoUrl.lastIndexOf("/")
+    const fileName = videoUrl.substring(lastSlash + 1)
+    const fileNameWithoutExt = fileName.replace(/\.[^.]+(\?.*)?$/, "")
+    
+    // Obtener el directorio base del video
+    const basePath = videoUrl.substring(0, lastSlash)
+
+    // Intentar cada extensión de subtítulos
+    for (const ext of subtitleExtensions) {
+      const subtitleUrl = `${basePath}/${fileNameWithoutExt}${ext}`
+      
+      try {
+        // Usar GET con un timeout pequeño para verificar si el archivo existe
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000) // 5 segundos de timeout
+        
+        const response = await fetch(subtitleUrl, { 
+          method: "GET",
+          mode: "cors",
+          signal: controller.signal,
+          headers: {
+            "Range": "bytes=0-1" // Solo obtener los primeros bytes para no descargar el archivo entero
+          }
+        })
+        
+        clearTimeout(timeout)
+        
+        // Si la respuesta es OK o si es un rango parcial, el archivo existe
+        if (response.ok || response.status === 206) {
+          console.log(`[v0] Subtítulos detectados automáticamente: ${subtitleUrl}`)
+          return subtitleUrl
+        }
+      } catch (error) {
+        // Intentar con siguiente extensión
+        console.log(`[v0] No se encontró ${ext} para este video`)
+      }
+    }
+
+    return null
   }
 
   const saveProgress = (time: number) => {
@@ -132,6 +185,18 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
     window.addEventListener("resize", checkMobile)
     return () => window.removeEventListener("resize", checkMobile)
   }, [])
+
+  // Detectar automáticamente subtítulos cuando cambia la URL del video
+  useEffect(() => {
+    const detectAndSetSubtitles = async () => {
+      const detectedUrl = await detectSubtitleUrl(src)
+      setAutoDetectedSubtitleUrl(detectedUrl)
+    }
+
+    if (src) {
+      detectAndSetSubtitles()
+    }
+  }, [src, subtitleUrl])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -753,7 +818,17 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
         crossOrigin="anonymous"
         playsInline
         controls={false}
-      />
+      >
+        {(autoDetectedSubtitleUrl || subtitleUrl) && (
+          <track
+            kind="subtitles"
+            src={autoDetectedSubtitleUrl || subtitleUrl}
+            srcLang="es"
+            label="Español"
+            default
+          />
+        )}
+      </video>
 
       {showControls && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
