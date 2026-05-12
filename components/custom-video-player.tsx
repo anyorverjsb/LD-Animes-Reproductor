@@ -112,10 +112,36 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
     try {
       const response = await fetch(subtitleUrl)
       if (!response.ok) throw new Error('Error cargando subtítulos')
-      const content = await response.text()
+      
+      // Obtener como ArrayBuffer para manejar la codificación correctamente
+      const arrayBuffer = await response.arrayBuffer()
+      const view = new Uint8Array(arrayBuffer)
+      
+      // Detectar y remover BOM (Byte Order Mark)
+      let content: string
+      if (view[0] === 0xEF && view[1] === 0xBB && view[2] === 0xBF) {
+        // UTF-8 con BOM
+        content = new TextDecoder('utf-8').decode(arrayBuffer.slice(3))
+      } else if (view[0] === 0xFF && view[1] === 0xFE) {
+        // UTF-16 LE
+        content = new TextDecoder('utf-16le').decode(arrayBuffer.slice(2))
+      } else if (view[0] === 0xFE && view[1] === 0xFF) {
+        // UTF-16 BE
+        content = new TextDecoder('utf-16be').decode(arrayBuffer.slice(2))
+      } else {
+        // UTF-8 sin BOM (por defecto)
+        content = new TextDecoder('utf-8').decode(arrayBuffer)
+      }
+      
+      // Normalizar caracteres y remover caracteres problemáticos
+      content = content
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remover caracteres de control
+        .replace(/\uFEFF/g, '') // Remover BOM de Unicode adicional
+        .normalize('NFD') // Normalizar caracteres con acentos
+      
       const parsedSubtitles = parseSRTSubtitles(content)
       setSubtitles(parsedSubtitles)
-      console.log(`[v0] Subtítulos cargados: ${parsedSubtitles.length} líneas`)
+      console.log(`[v0] Subtítulos cargados correctamente: ${parsedSubtitles.length} entradas`)
     } catch (error) {
       console.log(`[v0] Error cargando subtítulos:`, error)
       setSubtitles([])
