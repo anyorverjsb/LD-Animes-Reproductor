@@ -38,6 +38,9 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
   const [buffered, setBuffered] = useState(0)
   const [isFillScreen, setIsFillScreen] = useState(false)
   const [autoDetectedSubtitleUrl, setAutoDetectedSubtitleUrl] = useState<string | null>(null)
+  const [currentSubtitleText, setCurrentSubtitleText] = useState<string>("")
+  const [subtitles, setSubtitles] = useState<Array<{ start: number; end: number; text: string }>>([])
+  const [showSubtitles, setShowSubtitles] = useState(true)
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout>()
   const lastTapRef = useRef<number>(0)
@@ -55,6 +58,68 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
 
     const finalKey = `video_progress_${hash}`
     return finalKey
+  }
+
+  const parseSRTSubtitles = (srtContent: string): Array<{ start: number; end: number; text: string }> => {
+    const subtitles: Array<{ start: number; end: number; text: string }> = []
+    const lines = srtContent.split('\n')
+    let i = 0
+
+    while (i < lines.length) {
+      const line = lines[i].trim()
+
+      // Buscar línea con formato de tiempo HH:MM:SS,mmm --> HH:MM:SS,mmm
+      if (line.includes('-->')) {
+        const timeParts = line.split('-->')
+        const startStr = timeParts[0].trim()
+        const endStr = timeParts[1].trim()
+
+        // Convertir tiempo a segundos
+        const parseTime = (timeStr: string) => {
+          const parts = timeStr.match(/(\d+):(\d+):(\d+)[,.](\d+)/)
+          if (!parts) return 0
+          return (
+            parseInt(parts[1]) * 3600 +
+            parseInt(parts[2]) * 60 +
+            parseInt(parts[3]) +
+            parseInt(parts[4]) / 1000
+          )
+        }
+
+        const start = parseTime(startStr)
+        const end = parseTime(endStr)
+
+        // Recopilar el texto del subtítulo
+        i++
+        const textLines: string[] = []
+        while (i < lines.length && lines[i].trim() !== '') {
+          textLines.push(lines[i])
+          i++
+        }
+
+        const text = textLines.join('\n')
+        if (text) {
+          subtitles.push({ start, end, text })
+        }
+      }
+      i++
+    }
+
+    return subtitles
+  }
+
+  const loadSubtitles = async (subtitleUrl: string) => {
+    try {
+      const response = await fetch(subtitleUrl)
+      if (!response.ok) throw new Error('Error cargando subtítulos')
+      const content = await response.text()
+      const parsedSubtitles = parseSRTSubtitles(content)
+      setSubtitles(parsedSubtitles)
+      console.log(`[v0] Subtítulos cargados: ${parsedSubtitles.length} líneas`)
+    } catch (error) {
+      console.log(`[v0] Error cargando subtítulos:`, error)
+      setSubtitles([])
+    }
   }
 
   const detectSubtitleUrl = async (videoUrl: string): Promise<string | null> => {
@@ -191,12 +256,46 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
     const detectAndSetSubtitles = async () => {
       const detectedUrl = await detectSubtitleUrl(src)
       setAutoDetectedSubtitleUrl(detectedUrl)
+      
+      // Si encontramos subtítulos, cargarlos
+      if (detectedUrl) {
+        await loadSubtitles(detectedUrl)
+      } else if (subtitleUrl) {
+        await loadSubtitles(subtitleUrl)
+      } else {
+        setSubtitles([])
+      }
     }
 
     if (src) {
       detectAndSetSubtitles()
     }
   }, [src, subtitleUrl])
+
+  // Sincronizar subtítulos con el tiempo actual del video
+  useEffect(() => {
+    const handleTimeUpdate = () => {
+      if (!videoRef.current || subtitles.length === 0) {
+        setCurrentSubtitleText("")
+        return
+      }
+
+      const currentTime = videoRef.current.currentTime
+      const activeSub = subtitles.find((sub) => currentTime >= sub.start && currentTime <= sub.end)
+
+      if (activeSub) {
+        setCurrentSubtitleText(activeSub.text)
+      } else {
+        setCurrentSubtitleText("")
+      }
+    }
+
+    const video = videoRef.current
+    if (video) {
+      video.addEventListener("timeupdate", handleTimeUpdate)
+      return () => video.removeEventListener("timeupdate", handleTimeUpdate)
+    }
+  }, [subtitles])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -829,6 +928,17 @@ export function CustomVideoPlayer({ src, title, onError, onLoad, forceFullSize =
           />
         )}
       </video>
+
+      {/* Subtítulos personalizados */}
+      {showSubtitles && currentSubtitleText && (
+        <div className="absolute bottom-16 left-0 right-0 flex justify-center px-4 py-2 pointer-events-none">
+          <div className="bg-black/80 rounded px-3 py-2 max-w-2xl text-center">
+            <p className="text-white text-sm md:text-base leading-snug whitespace-pre-wrap break-words">
+              {currentSubtitleText}
+            </p>
+          </div>
+        </div>
+      )}
 
       {showControls && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
